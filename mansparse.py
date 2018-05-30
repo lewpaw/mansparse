@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Author: Pawel Lewandowski
-# Apache license
 # Script to parse FirEye mans file to different formats, to be used either as a flat file or in different tool (eg. in Splunk)
 # possible outputs:
 # JSON (default)
