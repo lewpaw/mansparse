@@ -36,6 +36,7 @@ parser.add_argument("--date_to", help="output events only from this day, 2018-02
 parser.add_argument("-w", "--workdir", help="select working folder (for uzipping files), OS temp folder as default", action="store")
 parser.add_argument("-o", "--output", help="define output file name (original file name by default)", action="store")
 parser.add_argument("-d", "--delete_original", help="deletes original file if ends without errors", action="store_true")
+parser.add_argument("-i", "--ignore", nargs='+', help="ignores given datatypes (eg. persistence)", default=[])
 
 args = parser.parse_args()
 
@@ -51,6 +52,7 @@ output_filename = args.output if args.output else args.source.replace(".mans", "
 
 def unzip_mans():
 	if not args.silent:
+		print("[INFO] -------------------------")
 		print("[OK] Unzipping file "+args.source+ " to "+workdir)
 		print("[INFO] This may take a while")
 	zip_ref = zipfile.ZipFile(args.source, 'r')
@@ -76,78 +78,85 @@ def process_data_for_splunk(data):
 		for items in itemList[1].items():
 			if not re.match(r'^@', items[0]):
 				for items2 in items[1]:
-					try:
-						items2.update({"data_type":items[0]})
-						items2.update({"timestamp_from":pick_timestamp(items[0])})
-					except:
-						pass
-						
-					try:		#best effort to pick the right timestamp
-						items2.update({"@TIME":items2[pick_timestamp(items[0])]})
-					except:
+					for timestamp in pick_timestamp(items[0]):
 						try:
-							items2.update({"@TIME":items2["@created"]})
-							items2.update({"timestamp_from":"@created"})
+							items2.update({"data_type":items[0]})
+							items2.update({"timestamp_from":timestamp})
 						except:
 							pass
-						pass
-					
-					# piece of shit below looks for data between two dates
-					# TODO: make the code below more elegant
-					try:
-						if args.date_from:			
-							if datetime.strptime(args.date_from.replace("Z",""),"%Y-%m-%dT%H:%M:%S") > datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
-								continue
-						if args.date_to:
-							if datetime.strptime(args.date_to.replace("Z",""),"%Y-%m-%dT%H:%M:%S") < datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
-								continue
-					except:
-						pass
-					output_data.append(items2)
+							
+						try:		#best effort to pick the right timestamp
+							items2.update({"@TIME":items2[timestamp]})
+						except:
+							try:
+								items2.update({"@TIME":items2["@created"]})
+								items2.update({"timestamp_from":"@created"})
+							except:
+								pass
+							pass
+						
+						# piece of shit below looks for data between two dates
+						# TODO: make the code below more elegant
+						try:
+							if args.date_from:			
+								if datetime.strptime(args.date_from.replace("Z",""),"%Y-%m-%dT%H:%M:%S") > datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
+									continue
+							if args.date_to:
+								if datetime.strptime(args.date_to.replace("Z",""),"%Y-%m-%dT%H:%M:%S") < datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
+									continue
+						except:
+							pass
+						output_data.append(items2)
 
 	return output_data
 
 def pick_timestamp(data_type): #this function picks a field determining on data type (eg. last visit of URL)
 	dict = {
-		'ServiceItem':'@created',
-		'PortItem':'@created',
-		'UserItem':'@created',
-		'TaskItem':'MostRecentRunTime',
-		'PrefetchItem':'LastRun',
-		'VolumeItem':'CreationTime',
-		'RegistryItem':'Modified',
-		'RouteEntryItem':'@created',
-		'ArpEntryItem':'@created',
-		'FileDownloadHistoryItem':'EndDate',
-		'PersistenceItem':'FileAccessed',
-		'UrlHistoryItem':'LastVisitDate'
+		'ServiceItem':['@created'], #TODO replace this with a list, to be able to porcess multiple timestamps per events
+		'PortItem':['@created'],
+		'UserItem':['@created','LastLogin'],
+		'TaskItem':['MostRecentRunTime'],
+		'PrefetchItem':['Created','LastRun'],
+		'VolumeItem':['CreationTime'],
+		'RegistryItem':['Modified'],
+		'RouteEntryItem':['@created'],
+		'ArpEntryItem':['@created'],
+		'FileDownloadHistoryItem':['StartDate','EndDate'],
+		'PersistenceItem':["FileAccessed","FileChanged","FileCreated","FileModified","RegModified"],
+		'UrlHistoryItem':['LastVisitDate'],
+		'ProcessItem':['startTime']
 	}
 	return dict.get(data_type,'@created')
 	
 def save_as_json(output_filename, data):
 	with open(output_filename, 'a') as output_file:
 		json.dump(data, output_file, indent=4, sort_keys=True)
-	if not args.silent:
-		print("[OK] saving output as: "+output_filename)
+#	if not args.silent:
+#		print("[INFO] -------------------------")
+#		print("[OK] saving output as: "+output_filename)
 	output_file.close()
 	return
 	
 def save_as_xml(output_filename, data):
 	if not args.silent:
+		print("[INFO] -------------------------")
 		print("[ERR] XML output is not ready yet")
 	return
 	
 def save_as_csv(output_filename, data):
 	if not args.silent:
+		print("[INFO] -------------------------")
 		print("[ERR] CSV output is not ready yet")
 	return
 	
 def cleanup():
 	if not args.silent:
+		print("[INFO] -------------------------")
 		print("[OK] Cleaning - deleting "+workdir)
 	if args.delete_original:
 		os.remove(args.source)
 		if not args.silent:
+			print("[INFO] -------------------------")
 			print("[OK] Cleaning - deleting "+args.source)
 	shutil.rmtree(workdir)
 	
@@ -161,11 +170,14 @@ if __name__ == "__main__":
 		for results in files["results"]:
 			if results["type"] == "application/xml":		# looking for XML files only
 				datatype = files["generator"]
+				
+								
 				filename = workdir+'\\'+results["payload"]
 				filesize = os.path.getsize(filename)/(1024*1024)
 
-				if filesize < args.max_filesize:			# limiting file size to increase processing speed
+				if filesize < args.max_filesize and datatype not in args.ignore:			# limiting file size to increase processing speed
 					if not args.silent:
+						print("[INFO] -------------------------")
 						print("[OK] processing: "+datatype)
 						print("[OK] file: "+filename)					
 						print("[OK] size: {0:0.2f}".format(filesize)+" MB")
@@ -183,10 +195,12 @@ if __name__ == "__main__":
 						save_as_csv(output_filename,data)
 				else:
 					if not args.silent:
+						print("[INFO] -------------------------")
 						print("[INFO] skipping: "+datatype)					
 						print("[INFO] file: "+filename)
 						print("[INFO] size: {0:0.2f}".format(filesize)+" MB")
 						print("[INFO] larger than limit: " + str(args.max_filesize)+" MB")
+						print("[INFO] or on ignore list")
 	cleanup()
 
 
