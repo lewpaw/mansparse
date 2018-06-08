@@ -54,8 +54,17 @@ def unzip_mans():
 		print("[OK] Unzipping file "+args.source+ " to "+workdir)
 		print("[INFO] This may take a while")
 	zip_ref = zipfile.ZipFile(args.source, 'r')
-	zip_ref.extractall(workdir)
-	zip_ref.close()
+	try: 
+		zip_ref.extractall(workdir)
+	except RuntimeError as e: 
+		print("[INFO] Zip seems password protected")
+		zip_pass = input("Enter zip password")
+		try: 
+			zip_ref.extractall(workdir, pwd=bytes(zip_pass, 'utf-8') )
+		except Exception as default_error:
+			raise default_error
+	finally:
+		zip_ref.close()
 
 def process_manifest():
 	with open(workdir+'\manifest.json') as f:
