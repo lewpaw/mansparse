@@ -20,6 +20,7 @@ import xmlr			# for processing huge XMLs
 import json
 import re
 from datetime import datetime
+#import pprint	#DEBUG
 
 ##############################
 # arguments handling
@@ -70,32 +71,64 @@ def process_data_for_splunk(data):
 	output_data = []
 
 	for itemList in data.items():				#the biggest mess ever - flattening JSON, to be beutified
+		#pprint.pprint(itemList)				#DEBUG
+		
 		for items in itemList[1].items():
 			if not re.match(r'^@', items[0]):
 				for items2 in items[1]:
 					try:
 						items2.update({"data_type":items[0]})
+						items2.update({"timestamp_from":pick_timestamp(items[0])})
 					except:
 						pass
-					if not items2 == "@created":		#ok, now this is the worst coding ever, checking if the date item exist, if not then skip
-					# piece of shit below looks for data between two dates
-					# TODO: make the code below more elegant
+						
+					try:		#best effort to pick the right timestamp
+						items2.update({"@TIME":items2[pick_timestamp(items[0])]})
+					except:
 						try:
-							if args.date_from:			
-								if datetime.strptime(args.date_from.replace("Z",""),"%Y-%m-%dT%H:%M:%S") > datetime.strptime(items2["@created"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
-									continue
-							if args.date_to:
-								if datetime.strptime(args.date_to.replace("Z",""),"%Y-%m-%dT%H:%M:%S") < datetime.strptime(items2["@created"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
-									continue
+							items2.update({"@TIME":items2["@created"]})
+							items2.update({"timestamp_from":"@created"})
 						except:
 							pass
-						output_data.append(items2)
+						pass
+					
+					# piece of shit below looks for data between two dates
+					# TODO: make the code below more elegant
+					try:
+						if args.date_from:			
+							if datetime.strptime(args.date_from.replace("Z",""),"%Y-%m-%dT%H:%M:%S") > datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
+								continue
+						if args.date_to:
+							if datetime.strptime(args.date_to.replace("Z",""),"%Y-%m-%dT%H:%M:%S") < datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
+								continue
+					except:
+						pass
+					output_data.append(items2)
 
 	return output_data
+
+def pick_timestamp(data_type): #this function picks a field determining on data type (eg. last visit of URL)
+	dict = {
+		'ServiceItem':'@created',
+		'PortItem':'@created',
+		'UserItem':'@created',
+		'TaskItem':'MostRecentRunTime',
+		'PrefetchItem':'LastRun',
+		'VolumeItem':'CreationTime',
+		'RegistryItem':'Modified',
+		'RouteEntryItem':'@created',
+		'ArpEntryItem':'@created',
+		'FileDownloadHistoryItem':'EndDate',
+		'PersistenceItem':'FileAccessed',
+		'UrlHistoryItem':'LastVisitDate'
+	}
+	return dict.get(data_type,'@created')
 	
 def save_as_json(output_filename, data):
 	with open(output_filename, 'a') as output_file:
-		json.dump(data, output_file, indent=4)
+		json.dump(data, output_file, indent=4, sort_keys=True)
+	if not args.silent:
+		print("[OK] saving output as: "+output_filename)
 	output_file.close()
 	return
 	
