@@ -9,6 +9,11 @@
 #
 # files get decompressed in temp folder
 #
+# corrected password handling
+#
+# now processing metadata.json to get hostname, it's added to every events
+#
+#
 
 import os
 import sys
@@ -37,6 +42,7 @@ parser.add_argument("-w", "--workdir", help="select working folder (for uzipping
 parser.add_argument("-o", "--output", help="define output file name (original file name by default)", action="store")
 parser.add_argument("-d", "--delete_original", help="deletes original file if ends without errors", action="store_true")
 parser.add_argument("-i", "--ignore", nargs='+', help="ignores given datatypes (eg. persistence)", default=[])
+parser.add_argument("-p", "--password", action='store', help="provide password for encrypted mans files")
 
 args = parser.parse_args()
 
@@ -46,33 +52,54 @@ if not args.source:
 
 workdir = args.workdir if args.workdir else tempfile.mkdtemp()
 output_filename = args.output if args.output else args.source.replace(".mans", "."+args.format.lower())
+zip_pass = args.password if args.password else ''
 
 #
 ############################################	
 
-def unzip_mans():
-	if not args.silent:
-		print("[INFO] -------------------------")
-		print("[OK] Unzipping file "+args.source+ " to "+workdir)
-		print("[INFO] This may take a while")
+def unzip_mans(filename, datatype):
 	zip_ref = zipfile.ZipFile(args.source, 'r')
-	try: 
-		zip_ref.extractall(workdir)
-	except RuntimeError as e: 
-		print("[INFO] Zip seems password protected")
-		zip_pass = input("Enter zip password")
+	if zip_ref.getinfo(filename).file_size/(1024*1024) < args.max_filesize:
+		if not args.silent:
+			print("[ OK ] Unzipping file "+filename+ " to "+workdir)
+		zip_ref.extract(filename, path=workdir, pwd=bytes(zip_pass, 'utf-8'))
+	else:
+		if not args.silent:
+			print("[INFO] skipping file: "+filename)					
+			print("[INFO] size: {0:0.2f}".format(zip_ref.getinfo(filename).file_size/(1024*1024))+" MB")
+			print("[INFO] larger than limit: " + str(args.max_filesize)+" MB")
+		zip_ref.close()
+		return False
+	zip_ref.close()
+	return True
+
+def process_manifest():
+	zip_ref = zipfile.ZipFile(args.source, 'r')
+	global zip_pass
+	try:
+		with zip_ref.open('manifest.json', pwd=bytes(zip_pass, 'utf-8')) as f:
+			manifest = json.load(f)
+	except RuntimeError as e:
+		if not args.silent:
+			print("[INFO] Zip seems password protected")
+		zip_pass = input("Enter zip password: ")
 		try: 
-			zip_ref.extractall(workdir, pwd=bytes(zip_pass, 'utf-8') )
+			with zip_ref.open('manifest.json') as f:
+				manifest = json.load(f)
 		except Exception as default_error:
 			raise default_error
 	finally:
 		zip_ref.close()
 
-def process_manifest():
-	with open(workdir+'\manifest.json') as f:
-		manifest = json.load(f)
-	f.close()
 	return manifest
+
+def process_metadata():
+	zip_ref = zipfile.ZipFile(args.source, 'r')
+	global zip_pass
+	with zip_ref.open('metadata.json', pwd=bytes(zip_pass, 'utf-8')) as f:
+		metadata = json.load(f)
+	zip_ref.close()
+	return metadata
 
 def process_xml(filename):
 	data = xmlr.xmlparse(filename)
@@ -82,15 +109,13 @@ def process_data_for_splunk(data):
 	output_data = []
 
 	for itemList in data.items():				#the biggest mess ever - flattening JSON, to be beutified
-		#pprint.pprint(itemList)				#DEBUG
 		
 		for items in itemList[1].items():
 			if not re.match(r'^@', items[0]):
 				for items2 in items[1]:
 					for timestamp in pick_timestamp(items[0]):
 						try:
-							items2.update({"data_type":items[0]})
-							items2.update({"timestamp_from":timestamp})
+							items2.update({"data_type":items[0]},{"timestamp_from":timestamp},{"hostname":metadata["agent"]["sysinfo"]["machine"]})
 						except:
 							pass
 							
@@ -98,8 +123,7 @@ def process_data_for_splunk(data):
 							items2.update({"@TIME":items2[timestamp]})
 						except:
 							try:
-								items2.update({"@TIME":items2["@created"]})
-								items2.update({"timestamp_from":"@created"})
+								items2.update({"@TIME":items2["@created"]},{"timestamp_from":"@created"})
 							except:
 								pass
 							pass
@@ -142,7 +166,7 @@ def save_as_json(output_filename, data):
 		json.dump(data, output_file, indent=4, sort_keys=True)
 #	if not args.silent:
 #		print("[INFO] -------------------------")
-#		print("[OK] saving output as: "+output_filename)
+#		print("[ OK ] saving output as: "+output_filename)
 	output_file.close()
 	return
 	
@@ -161,55 +185,56 @@ def save_as_csv(output_filename, data):
 def cleanup():
 	if not args.silent:
 		print("[INFO] -------------------------")
-		print("[OK] Cleaning - deleting "+workdir)
+		print("[ OK ] Cleaning - deleting "+workdir)
 	if args.delete_original:
 		os.remove(args.source)
 		if not args.silent:
 			print("[INFO] -------------------------")
-			print("[OK] Cleaning - deleting "+args.source)
+			print("[ OK ] Cleaning - deleting "+args.source)
 	shutil.rmtree(workdir)
 	
 if __name__ == "__main__":
 	output_file = open(output_filename, 'w')		#clearing output file
 	output_file.close()
-	unzip_mans()
+
 	manifest = process_manifest()
+	metadata = process_metadata()
 	
 	for files in manifest["audits"]:
 		for results in files["results"]:
 			if results["type"] == "application/xml":		# looking for XML files only
 				datatype = files["generator"]
 				
-								
-				filename = workdir+'\\'+results["payload"]
-				filesize = os.path.getsize(filename)/(1024*1024)
+				if datatype not in args.ignore:
+					filename = results["payload"]
 
-				if filesize < args.max_filesize and datatype not in args.ignore:			# limiting file size to increase processing speed
 					if not args.silent:
 						print("[INFO] -------------------------")
-						print("[OK] processing: "+datatype)
-						print("[OK] file: "+filename)					
-						print("[OK] size: {0:0.2f}".format(filesize)+" MB")
+						print("[ OK ] processing: "+datatype)
+						print("[ OK ] file: "+filename)					
 
-					data = []
-					
-					data = process_xml(filename)
-					data = process_data_for_splunk(data)
+					if unzip_mans(filename,datatype):
+						data = []
 						
-					if args.format == "JSON":
-						save_as_json(output_filename,data)
-					elif args.format == "XML":
-						save_as_xml(output_filename,data)
-					elif args.format == "CSV":
-						save_as_csv(output_filename,data)
+						data = process_xml(workdir+'\\'+filename)
+						data = process_data_for_splunk(data)
+							
+						if args.format == "JSON":
+							save_as_json(output_filename,data)
+						elif args.format == "XML":
+							save_as_xml(output_filename,data)
+						elif args.format == "CSV":
+							save_as_csv(output_filename,data)
+					
 				else:
 					if not args.silent:
 						print("[INFO] -------------------------")
 						print("[INFO] skipping: "+datatype)					
 						print("[INFO] file: "+filename)
-						print("[INFO] size: {0:0.2f}".format(filesize)+" MB")
-						print("[INFO] larger than limit: " + str(args.max_filesize)+" MB")
-						print("[INFO] or on ignore list")
+						print("[INFO] is on ignore list")
+	if not args.silent:
+		print("[INFO] -------------------------")
+		print("[ OK ] done, output file: "+output_filename)					
 	cleanup()
 
 
