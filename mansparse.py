@@ -13,7 +13,8 @@
 #
 # now processing metadata.json to get hostname, it's added to every events
 #
-#
+# example use:
+# python3 mansparse.py giAIoKyf7NfbYiJsciKi52.mans -e stateagentinspector persistence --date_from "2019-02-15T12:22:46Z" --date_to "2019-02-15T12:23:43Z"
 
 import os
 import sys
@@ -41,7 +42,8 @@ parser.add_argument("--date_to", help="output events only from this day, 2018-02
 parser.add_argument("-w", "--workdir", help="select working folder (for uzipping files), OS temp folder as default", action="store")
 parser.add_argument("-o", "--output", help="define output file name (original file name by default)", action="store")
 parser.add_argument("-d", "--delete_original", help="deletes original file if ends without errors", action="store_true")
-parser.add_argument("-i", "--ignore", nargs='+', help="ignores given datatypes (eg. persistence)", default=[])
+parser.add_argument("-i", "--include", nargs='+', help="includes given datatypes (eg. persistence) - this has higher priority than -e", default=[])
+parser.add_argument("-e", "--exclude", nargs='+', help="excludes given datatypes (eg. persistence) - this has lower priority than -i", default=[])
 parser.add_argument("-p", "--password", action='store', help="provide password for encrypted mans files")
 
 args = parser.parse_args()
@@ -130,14 +132,16 @@ def process_data_for_splunk(data):
 						
 						# piece of shit below looks for data between two dates
 						# TODO: make the code below more elegant
+
 						try:
-							if args.date_from:			
-								if datetime.strptime(args.date_from.replace("Z",""),"%Y-%m-%dT%H:%M:%S") > datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
+							if args.date_from:
+								if datetime.strptime(args.date_from.replace("Z",""),"%Y-%m-%dT%H:%M:%S") > datetime.strptime(items2["@TIME"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
 									continue
 							if args.date_to:
-								if datetime.strptime(args.date_to.replace("Z",""),"%Y-%m-%dT%H:%M:%S") < datetime.strptime(items2["timestamp"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
+								if datetime.strptime(args.date_to.replace("Z",""),"%Y-%m-%dT%H:%M:%S") < datetime.strptime(items2["@TIME"].replace("Z",""),"%Y-%m-%dT%H:%M:%S"):
 									continue
-						except:
+						except Exception as e:
+							#print("error " + str(e) + " " + str(items2["@TIME"]))
 							pass
 						output_data.append(items2)
 
@@ -166,7 +170,7 @@ def save_as_json(output_filename, data):
 		json.dump(data, output_file, indent=4, sort_keys=True)
 #	if not args.silent:
 #		print("[INFO] -------------------------")
-#		print("[ OK ] saving output as: "+output_filename)
+#		print("[ OK ] saving output as: "+output_filename)   # ok I have no idea why I commented this, but probably because of some imnportanyt rasons... let's just leave it.
 	output_file.close()
 	return
 	
@@ -204,10 +208,17 @@ if __name__ == "__main__":
 		for results in files["results"]:
 			if results["type"] == "application/xml":		# looking for XML files only
 				datatype = files["generator"]
+				filename = results["payload"]
 				
-				if datatype not in args.ignore:
-					filename = results["payload"]
+				#processing include vs exclude
+				if ((args.include) and (datatype in args.include)):
+					flag_process = True
+				elif (datatype not in args.exclude):
+					flag_process = True
+				else:
+					flag_process = False
 
+				if (flag_process):
 					if not args.silent:
 						print("[INFO] -------------------------")
 						print("[ OK ] processing: "+datatype)
@@ -231,7 +242,7 @@ if __name__ == "__main__":
 						print("[INFO] -------------------------")
 						print("[INFO] skipping: "+datatype)					
 						print("[INFO] file: "+filename)
-						print("[INFO] is on ignore list")
+						print("[INFO] is on exclusion list")
 	if not args.silent:
 		print("[INFO] -------------------------")
 		print("[ OK ] done, output file: "+output_filename)					
