@@ -211,8 +211,12 @@ if __name__ == "__main__":
 				filename = results["payload"]
 				
 				#processing include vs exclude
-				if ((args.include) and (datatype in args.include)):
-					flag_process = True
+				if (args.include):
+					if (datatype in args.include):
+						flag_process = True
+					else:
+						flag_process = False
+					
 				elif (datatype not in args.exclude):
 					flag_process = True
 				else:
@@ -247,5 +251,3 @@ if __name__ == "__main__":
 		print("[INFO] -------------------------")
 		print("[ OK ] done, output file: "+output_filename)					
 	cleanup()
-
-
