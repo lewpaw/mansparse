@@ -13,8 +13,9 @@
 #
 # now processing metadata.json to get hostname, it's added to every events
 #
-# example use:
-# python3 mansparse.py giAIoKyf7NfbYiJsciKi52.mans -e stateagentinspector persistence --date_from "2019-02-15T12:22:46Z" --date_to "2019-02-15T12:23:43Z"
+# examples use:
+# python3 mansparse.py --file giAIoKyf7NfbYiJsciKi52.mans -e stateagentinspector persistence --date_from "2019-02-15T12:22:46Z" --date_to "2019-02-15T12:23:43Z"
+# python3 mansparse.py --config hx_config.json --download 8112911
 
 import os
 import sys
@@ -25,42 +26,26 @@ import shutil
 import xmlr			# for processing huge XMLs
 import json
 import re
+import base64
+import requests
 from datetime import datetime
 #import pprint	#DEBUG
 
-##############################
-# arguments handling
-			
-parser = argparse.ArgumentParser(description='Script to parse FirEye mans file to different formats, to be used either as a flat file or in different tool (eg. in Splunk)')
-
-parser.add_argument("source", help="source mans file", nargs='?')
-parser.add_argument("-f", "--format", action='store', choices=['JSON','XML','CSV'], help="Choose the output format - JSON is default", default="JSON")
-parser.add_argument("-s", "--silent", help="silent mode", action="store_true")
-parser.add_argument("-m", "--max_filesize", action='store', help="max XML size in MB (because processing large XML files can take forever)", type=int, default=100)
-parser.add_argument("--date_from", help="output events only from this day, format 2018-02-09T10:22:28Z", action="store")
-parser.add_argument("--date_to", help="output events only from this day, 2018-02-09T10:22:28Z", action="store")
-parser.add_argument("-w", "--workdir", help="select working folder (for uzipping files), OS temp folder as default", action="store")
-parser.add_argument("-o", "--output", help="define output file name (original file name by default)", action="store")
-parser.add_argument("-d", "--delete_original", help="deletes original file if ends without errors", action="store_true")
-parser.add_argument("-i", "--include", nargs='+', help="includes given datatypes (eg. persistence) - this has higher priority than -e", default=[])
-parser.add_argument("-e", "--exclude", nargs='+', help="excludes given datatypes (eg. persistence) - this has lower priority than -i", default=[])
-parser.add_argument("-p", "--password", action='store', help="provide password for encrypted mans files")
-
-args = parser.parse_args()
-
-if not args.source:
-	parser.print_help()
-	sys.exit()
-
-workdir = args.workdir if args.workdir else tempfile.mkdtemp()
-output_filename = args.output if args.output else args.source.replace(".mans", "."+args.format.lower())
-zip_pass = args.password if args.password else ''
-
-#
-############################################	
+def download_mans(id):
+	print(id)
+	try:
+		print("dupa")
+		r_triages = requests.get(config_data["MANDIANT_HX_SERVER_URL"]+'/hx/api/v3/acqs/triages/'+id+".mans", headers=MANDIANT_HEADERS, verify=args.noverify)
+		open(id+'.mans', 'wb').write(r_triages.content)
+		#results=r_triages.json()
+		
+		print(results)
+	except Exception as e:
+		print(e)
+	return (id+'.mans')
 
 def unzip_mans(filename, datatype):
-	zip_ref = zipfile.ZipFile(args.source, 'r')
+	zip_ref = zipfile.ZipFile(source, 'r')
 	if zip_ref.getinfo(filename).file_size/(1024*1024) < args.max_filesize:
 		if not args.silent:
 			print("[ OK ] Unzipping file "+filename+ " to "+workdir)
@@ -76,7 +61,7 @@ def unzip_mans(filename, datatype):
 	return True
 
 def process_manifest():
-	zip_ref = zipfile.ZipFile(args.source, 'r')
+	zip_ref = zipfile.ZipFile(source, 'r')
 	global zip_pass
 	try:
 		with zip_ref.open('manifest.json', pwd=bytes(zip_pass, 'utf-8')) as f:
@@ -96,7 +81,7 @@ def process_manifest():
 	return manifest
 
 def process_metadata():
-	zip_ref = zipfile.ZipFile(args.source, 'r')
+	zip_ref = zipfile.ZipFile(source, 'r')
 	global zip_pass
 	with zip_ref.open('metadata.json', pwd=bytes(zip_pass, 'utf-8')) as f:
 		metadata = json.load(f)
@@ -191,13 +176,73 @@ def cleanup():
 		print("[INFO] -------------------------")
 		print("[ OK ] Cleaning - deleting "+workdir)
 	if args.delete_original:
-		os.remove(args.source)
+		os.remove(source)
 		if not args.silent:
 			print("[INFO] -------------------------")
-			print("[ OK ] Cleaning - deleting "+args.source)
+			print("[ OK ] Cleaning - deleting "+source)
 	shutil.rmtree(workdir)
+
+##############################
+# arguments handling and configuration - handle with care
+description="""
+Script to parse FirEye mans file to different formats, to be used either as a flat file or in different tool (eg. in Splunk)
+Example use:
+python3 mansparse.py --file giAIoKyf7NfbYiJsciKi52.mans -e stateagentinspector persistence --date_from "2019-02-15T12:22:46Z" --date_to "2019-02-15T12:23:43Z"'
+python3 mansparse.py --config hx_config.json --download 8112911
+"""
+parser = argparse.ArgumentParser(description)
+
+#parser.add_argument("source", help="source mans file", nargs='?')
+parser.add_argument("--format", action='store', choices=['JSON','XML','CSV'], help="Choose the output format - JSON is default", default="JSON")
+parser.add_argument("-s", "--silent", help="silent mode", action="store_true")
+parser.add_argument("-m", "--max_filesize", action='store', help="max XML size in MB (because processing large XML files can take forever)", type=int, default=100)
+parser.add_argument("--date_from", help="output events only from this day, format 2018-02-09T10:22:28Z", action="store")
+parser.add_argument("--date_to", help="output events only from this day, 2018-02-09T10:22:28Z", action="store")
+parser.add_argument("-w", "--workdir", help="select working folder (for uzipping files), OS temp folder as default", action="store")
+parser.add_argument("--file", help="input file name", action="store")
+parser.add_argument("-o", "--output", help="output file name (original file name by default)", action="store")
+parser.add_argument("--download", help="id of aquisition to download and process (config file needed)", action="store")
+parser.add_argument("--config", help="config file name", action="store")
+parser.add_argument("--delete_original", help="deletes original file if ends without errors", action="store_true")
+parser.add_argument("--include", nargs='+', help="includes given datatypes (eg. persistence) - this has higher priority than -e", default=[])
+parser.add_argument("--exclude", nargs='+', help="excludes given datatypes (eg. persistence) - this has lower priority than -i", default=[])
+parser.add_argument("-p", "--password", action='store', help="provide password for encrypted mans files")
+parser.add_argument("-nv","--noverify",  help="cert verify=False, please don't use it unless you're debugging", action="store_false", default=True)
+parser.add_argument("-nz","--nozip",  help="add this if you don't want the result to be zipped", action="store_true", default=False)
+
+args = parser.parse_args()
 	
+if args.config:
+	with open(args.config) as json_data_file:
+		config_data = json.load(json_data_file)
+
+if config_data:
+	MANDIANT_HEADERS = {
+		'Authorization': 'Basic '+base64.b64encode((config_data["MANDIANT_HX_USERNAME"]+":"+config_data["MANDIANT_HX_PASSWORD"]).encode('UTF-8')).decode('ascii'), 
+		'CF-Access-Client-ID': config_data["MANDIANT_HX_CF_Access_UserID"], 
+		'CF-Access-Client-Secret': config_data["MANDIANT_HX_CF_Access_UserSecret"], 
+		'accept': 'application/octet-stream'
+	}
+
+if args.file:
+	source = args.file
+elif args.download:
+	source = download_mans(id=args.download)
+else:
+	parser.print_help()
+	sys.exit()
+
+workdir = args.workdir if args.workdir else tempfile.mkdtemp()
+output_filename = args.output if args.output else source.replace(".mans", "."+args.format.lower())
+zip_pass = args.password if args.password else ''
+
+
+
+# END OF CONFIGURATION
+############################################
+
 if __name__ == "__main__":
+
 	output_file = open(output_filename, 'w')		#clearing output file
 	output_file.close()
 
